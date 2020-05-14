@@ -1,0 +1,11 @@
+[package]
+name = "yaap"
+version = "0.0.1"
+authors = ["Brendan Arciszewski <git@brendanarciszewski.ca>"]
+edition = "2018"
+license = "Apache-2.0"
+description = "A custom allocator facility playground"
+repository = "http://git.brendanarciszewski.ca/yaap"
+documentation = "https://docs.rs/yaap"
+
+[dependencies]
