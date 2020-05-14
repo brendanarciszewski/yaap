@@ -1,9 +1,8 @@
 #![no_std]
 use core::mem;
 
-pub trait AllocatorAwareContainer<'a> {
-    //fn allocator(&self) -> &dyn Allocator;
-    fn set_allocator(&mut self, alloc: &'a mut dyn Allocator);
+pub trait AllocatorAwareContainer {
+    fn allocator(&mut self) -> &mut dyn Allocator;
 }
 pub trait Allocator {
     unsafe fn allocate(&mut self, size: usize, align: usize) -> *mut ();

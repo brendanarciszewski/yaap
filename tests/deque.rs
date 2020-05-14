@@ -41,9 +41,9 @@ struct CustomDeque<'a, T> {
     alloc: &'a mut dyn Allocator
 }
 
-impl<'a, 'b: 'a, T> AllocatorAwareContainer<'b> for CustomDeque<'a, T> {
-    fn set_allocator(&mut self, alloc: &'b mut dyn Allocator) {
-        self.alloc = alloc;
+impl<T> AllocatorAwareContainer for CustomDeque<'_, T> {
+    fn allocator(&mut self) -> &mut dyn Allocator {
+        self.alloc
     }
 }
 
