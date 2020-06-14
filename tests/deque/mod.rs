@@ -1,6 +1,6 @@
 use core::{cell::RefCell, ops, ptr::NonNull};
 use std::rc::Rc;
-use yaap::{a, prelude::*};
+use yaap::a::{self, Allocator};
 
 type Data<T> = a::Ptr<T>;
 type Link<T> = Data<Node<T>>;
@@ -173,5 +173,11 @@ impl<T> ops::IndexMut<usize> for Seque<T> {
             );
         }
         unsafe { self.node.get_unchecked_mut(index) }
+    }
+}
+
+impl<T> a::AllocatorAwareContainer for Seque<T> {
+    fn allocator(&self) -> Rc<RefCell<dyn Allocator>> {
+        self.alloc.clone()
     }
 }

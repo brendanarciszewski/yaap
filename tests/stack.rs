@@ -1,26 +1,28 @@
 use core::{cell::RefCell, fmt, ptr::NonNull};
 use std::rc::Rc;
 use yaap::{a, prelude::*};
+use typenum::{U1024, U127, U128};
+use generic_array::{ArrayLength, GenericArray};
 
 mod stack_alloc {
     use super::*;
-    const S_ALLOC_LEN: usize = 1024;
-    #[repr(C, align(64))]
-    struct AlignedData(pub [u8; S_ALLOC_LEN]);
 
-    impl fmt::Debug for AlignedData {
+    #[repr(C, align(64))]
+    struct AlignedData<N: ArrayLength<u8>>(pub GenericArray<u8, N>);
+
+    impl<N> fmt::Debug for AlignedData<N> where N: ArrayLength<u8> {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.debug_list().entries(self.0.iter()).finish()
         }
     }
 
     #[derive(Debug)]
-    pub struct StackAllocator {
-        data: AlignedData,
+    pub struct StackAllocator<N: ArrayLength<u8>> {
+        data: AlignedData<N>,
         used: usize,
     }
 
-    impl fmt::Display for StackAllocator {
+    impl<N> fmt::Display for StackAllocator<N> where N: ArrayLength<u8> {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.debug_list()
                 .entries(self.data.0[..self.used].iter())
@@ -28,9 +30,9 @@ mod stack_alloc {
         }
     }
 
-    impl Allocator for StackAllocator {
+    impl<N> Allocator for StackAllocator<N> where N: ArrayLength<u8> {
         unsafe fn allocate(&mut self, size: usize, align: usize) -> a::PtrUninit<()> {
-            if self.used + size > S_ALLOC_LEN {
+            if self.used + size > N::USIZE {
                 return None;
             }
             let start_ptr = self.data.0.as_mut_ptr();
@@ -47,15 +49,15 @@ mod stack_alloc {
         unsafe fn deallocate(&mut self, _pointer: *mut (), _size: usize, _align: usize) {}
     }
 
-    impl StackAllocator {
-        pub const fn new() -> Self {
+    impl<N> StackAllocator<N> where N: ArrayLength<u8>{
+        pub fn new() -> Self {
             Self {
-                data: AlignedData([0; 1024]), //unsafe {mem::MaybeUninit::uninit().assume_init()},
+                data: AlignedData(GenericArray::<u8, N>::default()), //unsafe {mem::MaybeUninit::uninit().assume_init()},
                 used: 0,
             }
         }
 
-        pub const fn used(&self) -> usize {
+        pub fn used(&self) -> usize {
             self.used
         }
 
@@ -66,18 +68,13 @@ mod stack_alloc {
 }
 
 mod deque;
-impl<T> AllocatorAwareContainer for deque::Seque<T> {
-    fn allocator(&self) -> Rc<RefCell<dyn Allocator>> {
-        self.alloc.clone()
-    }
-}
 
 use deque::Seque;
 use stack_alloc::StackAllocator;
 
 #[test]
 fn none() {
-    let s_alloc = Rc::new(RefCell::new(StackAllocator::new()));
+    let s_alloc = Rc::new(RefCell::new(StackAllocator::<U1024>::new()));
     let _c = Seque::<usize>::with_capacity_in(0, s_alloc.clone());
     assert_eq!(s_alloc.borrow().used(), 128);
     for v in s_alloc.borrow().slice() {
@@ -86,8 +83,18 @@ fn none() {
 }
 
 #[test]
+#[should_panic]
+fn single_fail() {
+    let s_alloc = Rc::new(RefCell::new(StackAllocator::<U127>::new()));
+    let mut c = Seque::<usize>::with_capacity_in(1, s_alloc.clone());
+    // fails here because allocate returned None, but the capacity wasn't updated
+    // TODO: propogate error to caller
+    c.push_back(4);
+}
+
+#[test]
 fn single() {
-    let s_alloc = Rc::new(RefCell::new(StackAllocator::new()));
+    let s_alloc = Rc::new(RefCell::new(StackAllocator::<U128>::new()));
     let mut c = Seque::<usize>::with_capacity_in(1, s_alloc.clone());
     c.push_back(4);
     assert_eq!(4, c[0]);
@@ -98,7 +105,7 @@ fn single() {
 
 #[test]
 fn reallocate() {
-    let s_alloc = Rc::new(RefCell::new(StackAllocator::new()));
+    let s_alloc = Rc::new(RefCell::new(StackAllocator::<U1024>::new()));
     let mut c = Seque::<usize>::with_capacity_in(1, s_alloc.clone());
     for i in 0..deque::NODE_ARRAY_LEN + 1 {
         c.push_back(2 + i);
@@ -107,7 +114,7 @@ fn reallocate() {
 }
 #[test]
 fn large_allocate() {
-    let s_alloc = Rc::new(RefCell::new(StackAllocator::new()));
+    let s_alloc = Rc::new(RefCell::new(StackAllocator::<U1024>::new()));
     let mut c = Seque::<usize>::with_capacity_in(deque::NODE_ARRAY_LEN * 2, s_alloc.clone());
     for i in 0..deque::NODE_ARRAY_LEN + 2 {
         c.push_back(2 + i);
@@ -119,7 +126,7 @@ fn large_allocate() {
 #[test]
 #[should_panic(expected = "index out of bounds")]
 fn no_push() {
-    let s_alloc = Rc::new(RefCell::new(StackAllocator::new()));
+    let s_alloc = Rc::new(RefCell::new(StackAllocator::<U1024>::new()));
     let mut c = Seque::<u8>::with_capacity_in(1, s_alloc.clone());
     c[0] = 5;
 }
@@ -127,7 +134,7 @@ fn no_push() {
 #[test]
 #[should_panic(expected = "index out of bounds")]
 fn no_push_empty() {
-    let s_alloc = Rc::new(RefCell::new(StackAllocator::new()));
+    let s_alloc = Rc::new(RefCell::new(StackAllocator::<U1024>::new()));
     let mut c = Seque::<u8>::with_capacity_in(0, s_alloc.clone());
     c[0] = 5;
 }
