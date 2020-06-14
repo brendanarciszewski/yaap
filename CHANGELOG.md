@@ -1,6 +1,8 @@
 # Changelog
 
 ## Latest
+
+## v0.0.2
 -   added changelog
 -   introduced an aliased `RefCell` into the allocator API so that unique
     references can be obtained as late as possible (enabling allocator sharing
