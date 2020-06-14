@@ -1,29 +1,46 @@
 #![no_std]
-use core::mem;
 
-pub trait AllocatorAwareContainer {
-    fn allocator(&mut self) -> &mut dyn Allocator;
+#[cfg(feature = "alloc")]
+extern crate alloc;
+
+pub mod prelude {
+    pub use super::a::Allocator;
+    #[cfg(feature = "alloc")]
+    pub use super::a::AllocatorAwareContainer;
 }
-pub trait Allocator {
-    unsafe fn allocate(&mut self, size: usize, align: usize) -> *mut ();
-    unsafe fn deallocate(&mut self, pointer: *mut (), size: usize, align: usize);
-}
 
-pub mod helper {
-    use super::*;
+pub mod a {
+    #[cfg(feature = "alloc")]
+    use alloc::rc::Rc;
+    use core::{cell::RefCell, mem, mem::MaybeUninit, ptr::NonNull};
 
-    pub fn allocate_object<T>(alloc: &mut dyn Allocator, num_objects: usize) -> *mut T {
-        unsafe {
-            alloc.allocate(
-                mem::size_of::<T>() * num_objects,
-                mem::align_of::<T>(),
-            ) as *mut _
-        }
+    #[cfg(feature = "alloc")]
+    pub trait AllocatorAwareContainer {
+        fn allocator(&self) -> Rc<RefCell<dyn Allocator>>;
     }
 
-    pub unsafe fn deallocate_object<T>(alloc: &mut dyn Allocator, pointer: *mut (), num_objects: usize) {
-        alloc.deallocate(
-            pointer,
+    pub type Ptr<T> = Option<NonNull<T>>;
+    pub type PtrUninit<T> = Ptr<MaybeUninit<T>>;
+
+    pub trait Allocator {
+        unsafe fn allocate(&mut self, size: usize, align: usize) -> PtrUninit<()>;
+        unsafe fn deallocate(&mut self, pointer: *mut (), size: usize, align: usize);
+    }
+
+    pub unsafe fn allocate<T>(alloc: &RefCell<dyn Allocator>, num_objects: usize) -> PtrUninit<T> {
+        alloc
+            .borrow_mut()
+            .allocate(mem::size_of::<T>() * num_objects, mem::align_of::<T>())
+            .map(NonNull::cast::<MaybeUninit<T>>)
+    }
+
+    pub unsafe fn deallocate<T>(
+        alloc: &RefCell<dyn Allocator>,
+        pointer: *mut T,
+        num_objects: usize,
+    ) {
+        alloc.borrow_mut().deallocate(
+            pointer as *mut (),
             mem::size_of::<T>() * num_objects,
             mem::align_of::<T>(),
         )

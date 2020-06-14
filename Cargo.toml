@@ -8,4 +8,11 @@ description = "A custom allocator facility playground"
 repository = "http://git.brendanarciszewski.ca/yaap"
 documentation = "https://docs.rs/yaap"
 
+[features]
+alloc = []
+
 [dependencies]
+
+[[test]]
+name = "stack"
+required-features = ["alloc"]
