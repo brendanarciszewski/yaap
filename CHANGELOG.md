@@ -1,6 +1,7 @@
 # Changelog
 
 ## Latest
+-   reconfigured to use wrapper type for nicer methods
 
 ## v0.0.2
 -   added changelog

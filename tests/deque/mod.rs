@@ -1,5 +1,4 @@
-use core::{cell::RefCell, ops, ptr::NonNull};
-use std::rc::Rc;
+use core::{ops, ptr::NonNull};
 use yaap::a::{self, Allocator};
 
 type Data<T> = a::Ptr<T>;
@@ -21,25 +20,25 @@ impl<T> Node<T> {
     // }
 
     #[inline(always)]
-    fn allocate_node_data(alloc: &RefCell<dyn Allocator>) -> Data<T> {
+    fn allocate_node_data(alloc: &Allocator) -> Data<T> {
         // SAFETY: data is never accessed before first writing a valid value
-        unsafe { a::allocate::<T>(alloc, NODE_ARRAY_LEN).map(NonNull::cast) }
+        unsafe { alloc.allocate::<T>(NODE_ARRAY_LEN).map(NonNull::cast) }
     }
 
-    pub fn with_data(alloc: &RefCell<dyn Allocator>) -> Self {
+    pub fn with_data(alloc: &Allocator) -> Self {
         Node {
             data: Node::allocate_node_data(alloc),
             next: None,
         }
     }
 
-    pub fn allocate_next_node(&mut self, alloc: &RefCell<dyn Allocator>) {
+    pub fn allocate_next_node(&mut self, alloc: &Allocator) {
         if self.next.is_some() {
             panic!("Replacing existing node");
         }
 
         self.next = unsafe {
-            a::allocate::<Node<T>>(alloc, 1).map(|mut node| {
+            alloc.allocate::<Node<T>>(1).map(|mut node| {
                 node.as_mut().as_mut_ptr().write(Node {
                     data: Node::allocate_node_data(alloc),
                     next: None,
@@ -109,15 +108,15 @@ pub struct Seque<T> {
     length: usize,
     capacity: usize,
     node: Node<T>,
-    alloc: Rc<RefCell<dyn Allocator>>,
+    alloc: Allocator,
 }
 
 impl<T> Seque<T> {
-    pub fn with_capacity_in(capacity: usize, alloc: Rc<RefCell<dyn Allocator>>) -> Self {
+    pub fn with_capacity_in(capacity: usize, alloc: Allocator) -> Self {
         let (node, capacity) = if capacity <= NODE_ARRAY_LEN {
-            (Node::with_data(alloc.as_ref()), NODE_ARRAY_LEN)
+            (Node::with_data(&alloc), NODE_ARRAY_LEN)
         } else {
-            let mut parent = Node::with_data(alloc.as_ref());
+            let mut parent = Node::with_data(&alloc);
             let mut i = 1 as usize;
             let capacity = loop {
                 i += 1;
@@ -127,7 +126,7 @@ impl<T> Seque<T> {
             };
             let mut node = &mut parent;
             while i > 1 {
-                node.allocate_next_node(alloc.as_ref());
+                node.allocate_next_node(&alloc);
                 i -= 1;
                 node = node.next_node_mut().expect("Just allocated");
             }
@@ -143,7 +142,7 @@ impl<T> Seque<T> {
 
     pub fn push_back(&mut self, val: T) {
         while self.length >= self.capacity {
-            self.node.allocate_next_node(self.alloc.as_ref());
+            self.node.allocate_next_node(&self.alloc);
             self.capacity += NODE_ARRAY_LEN;
         }
         unsafe { self.node.write_unchecked(self.length, val) }
@@ -177,7 +176,7 @@ impl<T> ops::IndexMut<usize> for Seque<T> {
 }
 
 impl<T> a::AllocatorAwareContainer for Seque<T> {
-    fn allocator(&self) -> Rc<RefCell<dyn Allocator>> {
+    fn allocator(&self) -> Allocator {
         self.alloc.clone()
     }
 }
