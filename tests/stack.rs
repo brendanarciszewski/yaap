@@ -1,6 +1,6 @@
 use core::{fmt, ptr::NonNull};
 use generic_array::{ArrayLength, GenericArray};
-use typenum::{U1024, U127, U128};
+use typenum::{U1024, U127, U128, U16};
 use yaap::{
     a::{self, Allocator},
     prelude::*,
@@ -90,7 +90,7 @@ use tracked::Tracked;
 #[test]
 fn none() {
     let res = Tracked::new(StackResource::<U1024>::new());
-    let _c = Seque::<usize>::with_capacity_in(0, Allocator::new(res.clone()));
+    let _c = Seque::<usize, U16>::with_capacity_in(0, Allocator::new(res.clone()));
     assert_eq!(res.borrow().used(), 128);
     for v in res.borrow().slice() {
         assert_eq!(v, &0)
@@ -100,7 +100,7 @@ fn none() {
 #[test]
 #[should_panic]
 fn single_fail() {
-    let mut c = Seque::<usize>::with_capacity_in(
+    let mut c = Seque::<usize, U16>::with_capacity_in(
         1,
         Allocator::new(Tracked::new(StackResource::<U127>::new())),
     );
@@ -112,7 +112,7 @@ fn single_fail() {
 #[test]
 fn single() {
     let res = Tracked::new(StackResource::<U128>::new());
-    let mut c = Seque::<usize>::with_capacity_in(1, Allocator::new(res.clone()));
+    let mut c = Seque::<usize, U16>::with_capacity_in(1, Allocator::new(res.clone()));
     c.push_back(4);
     assert_eq!(4, c[0]);
     c[0] = 5;
@@ -123,8 +123,8 @@ fn single() {
 #[test]
 fn reallocate() {
     let res = Tracked::new(StackResource::<U1024>::new());
-    let mut c = Seque::<usize>::with_capacity_in(1, Allocator::new(res.clone()));
-    for i in 0..deque::NODE_ARRAY_LEN + 1 {
+    let mut c = Seque::<usize, U16>::with_capacity_in(1, Allocator::new(res.clone()));
+    for i in 0..c.node_array_len() + 1 {
         c.push_back(2 + i);
     }
     assert_eq!(res.borrow().used(), 672);
@@ -132,9 +132,9 @@ fn reallocate() {
 #[test]
 fn large_allocate() {
     let res = Tracked::new(StackResource::<U1024>::new());
-    let mut c =
-        Seque::<usize>::with_capacity_in(deque::NODE_ARRAY_LEN * 2, Allocator::new(res.clone()));
-    for i in 0..deque::NODE_ARRAY_LEN + 2 {
+    type Seq16 = Seque<usize, U16>;
+    let mut c = Seq16::with_capacity_in(Seq16::NODE_ARRAY_LEN * 2, Allocator::new(res.clone()));
+    for i in 0..Seq16::NODE_ARRAY_LEN + 2 {
         c.push_back(2 + i);
     }
     assert_eq!(res.borrow().used(), 672);
@@ -145,7 +145,7 @@ fn large_allocate() {
 #[should_panic(expected = "index out of bounds")]
 fn no_push() {
     let res = Tracked::new(StackResource::<U1024>::new());
-    let mut c = Seque::<u8>::with_capacity_in(1, Allocator::new(res.clone()));
+    let mut c = Seque::<u8, U16>::with_capacity_in(1, Allocator::new(res.clone()));
     c[0] = 5;
 }
 
@@ -153,6 +153,6 @@ fn no_push() {
 #[should_panic(expected = "index out of bounds")]
 fn no_push_empty() {
     let res = Tracked::new(StackResource::<U1024>::new());
-    let mut c = Seque::<u8>::with_capacity_in(0, Allocator::new(res.clone()));
+    let mut c = Seque::<u8, U16>::with_capacity_in(0, Allocator::new(res.clone()));
     c[0] = 5;
 }

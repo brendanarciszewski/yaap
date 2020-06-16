@@ -1,37 +1,41 @@
-use core::{ops, ptr::NonNull};
+use core::{marker::PhantomData, ops, ptr::NonNull};
+use typenum::Unsigned;
 use yaap::a::{self, Allocator};
 
 type Data<T> = a::Ptr<T>;
-type Link<T> = Data<Node<T>>;
+type Link<T, N> = Data<Node<T, N>>;
 
-pub static NODE_ARRAY_LEN: usize = 16;
-
-struct Node<T> {
+struct Node<T, N> {
     data: Data<T>,
-    next: Link<T>,
+    next: Link<T, N>,
+    _p: PhantomData<N>,
 }
 
-impl<T> Node<T> {
+impl<T, N> Node<T, N>
+where
+    N: Unsigned,
+{
+    /// assert!(N::USIZE < isize::MAX);
+    const ARRAY_LEN: usize = N::USIZE;
+
     pub fn with_data(alloc: &Allocator) -> Self {
-        Node {
-            data: Node::allocate_node_data(alloc),
+        Self {
+            data: Self::allocate_node_data(alloc),
             next: None,
+            _p: PhantomData,
         }
     }
 
     fn allocate_node_data(alloc: &Allocator) -> Data<T> {
         // SAFETY: data is never accessed before first writing a valid value
-        unsafe { alloc.allocate::<T>(NODE_ARRAY_LEN).map(NonNull::cast) }
+        unsafe { alloc.allocate::<T>(Self::ARRAY_LEN).map(NonNull::cast) }
     }
 
-    fn allocate_next_node(alloc: &Allocator) -> Link<T> {
+    fn allocate_next_node(alloc: &Allocator) -> Link<T, N> {
         // Safety: Able to remove MaybeUninit because underlying data is initialized
         unsafe {
-            alloc.allocate::<Node<T>>(1).map(|mut node| {
-                node.as_mut().as_mut_ptr().write(Node {
-                    data: Node::allocate_node_data(alloc),
-                    next: None,
-                });
+            alloc.allocate::<Node<T, N>>(1).map(|mut node| {
+                node.as_mut().as_mut_ptr().write(Self::with_data(alloc));
                 node.cast()
             })
         }
@@ -55,12 +59,12 @@ impl<T> Node<T> {
             self.next = None;
         }
         self.deallocate_node_data(alloc);
-        alloc.deallocate(self as *mut Node<T>, 1);
+        alloc.deallocate(self as *mut Self, 1);
     }
 
     unsafe fn deallocate_node_data(&mut self, alloc: &Allocator) {
         if let Some(data) = self.data {
-            alloc.deallocate(data.as_ptr(), NODE_ARRAY_LEN);
+            alloc.deallocate(data.as_ptr(), Self::ARRAY_LEN);
             self.data = None;
         }
     }
@@ -74,32 +78,24 @@ impl<T> Node<T> {
         self.deallocate_node_data(alloc);
     }
 
-    fn next_node_mut(&mut self) -> Option<&mut Self> {
-        self.next.as_mut().map(|node| unsafe { node.as_mut() })
-    }
-
-    fn next_node(&self) -> Option<&Self> {
-        self.next.as_ref().map(|node| unsafe { node.as_ref() })
-    }
-
     unsafe fn get_data_ptr_mut(&mut self, idx: usize) -> *mut T {
         let mut node = self;
-        let forward = idx / NODE_ARRAY_LEN;
+        let forward = idx / Self::ARRAY_LEN;
         for _i in 0..forward {
             node = node.next_node_mut().expect("next node not allocated");
         }
         let ptr = node.data.expect("accessing unallocated node data").as_ptr();
-        ptr.add(idx % NODE_ARRAY_LEN)
+        ptr.add(idx % Self::ARRAY_LEN)
     }
 
     unsafe fn get_data_ptr(&self, idx: usize) -> *const T {
         let mut node = self;
-        let forward = idx / NODE_ARRAY_LEN;
+        let forward = idx / Self::ARRAY_LEN;
         for _i in 0..forward {
             node = node.next_node().expect("next node not allocated");
         }
         let ptr = node.data.expect("accessing unallocated node data").as_ptr() as *const T;
-        ptr.add(idx % NODE_ARRAY_LEN)
+        ptr.add(idx % Self::ARRAY_LEN)
     }
 
     pub unsafe fn get_data_unchecked_mut(&mut self, idx: usize) -> &mut T {
@@ -115,7 +111,20 @@ impl<T> Node<T> {
     }
 }
 
-impl<T> ops::Drop for Seque<T> {
+impl<T, N> Node<T, N> {
+    fn next_node_mut(&mut self) -> Option<&mut Self> {
+        self.next.as_mut().map(|node| unsafe { node.as_mut() })
+    }
+
+    fn next_node(&self) -> Option<&Self> {
+        self.next.as_ref().map(|node| unsafe { node.as_ref() })
+    }
+}
+
+impl<T, N> ops::Drop for Seque<T, N>
+where
+    N: Unsigned,
+{
     fn drop(&mut self) {
         // Safety: all nodes below the first were allocated
         // all nodes will have their data deallocated
@@ -124,25 +133,38 @@ impl<T> ops::Drop for Seque<T> {
         }
     }
 }
-pub struct Seque<T> {
+
+pub struct Seque<T, N>
+where
+    N: Unsigned,
+{
     length: usize,
     capacity: usize,
-    node: Node<T>,
+    node: Node<T, N>,
     alloc: Allocator,
 }
 
-impl<T> Seque<T> {
+impl<T, N> Seque<T, N>
+where
+    N: Unsigned,
+{
+    pub const NODE_ARRAY_LEN: usize = Node::<T, N>::ARRAY_LEN;
+
+    pub fn node_array_len(&self) -> usize {
+        Self::NODE_ARRAY_LEN
+    }
+
     pub fn with_capacity_in(capacity: usize, alloc: Allocator) -> Self {
-        let (node, capacity) = if capacity <= NODE_ARRAY_LEN {
-            (Node::with_data(&alloc), NODE_ARRAY_LEN)
+        let (node, capacity) = if capacity <= Self::NODE_ARRAY_LEN {
+            (Node::with_data(&alloc), Self::NODE_ARRAY_LEN)
         } else {
             let mut parent = Node::with_data(&alloc);
             let capacity = {
                 let mut i = 1 as usize;
                 let cap = loop {
                     i += 1;
-                    if NODE_ARRAY_LEN * i >= capacity {
-                        break NODE_ARRAY_LEN * i;
+                    if Self::NODE_ARRAY_LEN * i >= capacity {
+                        break Self::NODE_ARRAY_LEN * i;
                     }
                 };
                 parent.allocate_node_chain(i - 1, &alloc);
@@ -162,14 +184,17 @@ impl<T> Seque<T> {
         if self.length >= self.capacity {
             let amount = self.length / self.capacity;
             self.node.allocate_node_chain(amount, &self.alloc);
-            self.capacity += NODE_ARRAY_LEN * amount;
+            self.capacity += Self::NODE_ARRAY_LEN * amount;
         }
         unsafe { self.node.write_data_unchecked(self.length, val) }
         self.length += 1;
     }
 }
 
-impl<T> ops::Index<usize> for Seque<T> {
+impl<T, N> ops::Index<usize> for Seque<T, N>
+where
+    N: Unsigned,
+{
     type Output = T;
     fn index(&self, index: usize) -> &Self::Output {
         if index >= self.length {
@@ -182,7 +207,10 @@ impl<T> ops::Index<usize> for Seque<T> {
     }
 }
 
-impl<T> ops::IndexMut<usize> for Seque<T> {
+impl<T, N> ops::IndexMut<usize> for Seque<T, N>
+where
+    N: Unsigned,
+{
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         if index >= self.length {
             panic!(
@@ -194,7 +222,10 @@ impl<T> ops::IndexMut<usize> for Seque<T> {
     }
 }
 
-impl<T> a::AllocatorAwareContainer for Seque<T> {
+impl<T, N> a::AllocatorAwareContainer for Seque<T, N>
+where
+    N: Unsigned,
+{
     fn allocator(&self) -> Allocator {
         self.alloc.clone()
     }
