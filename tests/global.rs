@@ -58,6 +58,14 @@ fn large_allocate() {
     for i in 0..Seq16::NODE_ARRAY_LEN + 2 {
         c.push_back(2 + i);
     }
+
+    for val in c.iter_mut() {
+        *val -= 1;
+    }
+
+    for (i, val) in c.iter().enumerate() {
+        assert_eq!(*val, 1 + i);
+    }
 }
 
 #[test]

@@ -5,7 +5,7 @@ use yaap::a::{self, Allocator};
 type Data<T> = a::Ptr<T>;
 type Link<T, N> = Data<Node<T, N>>;
 
-struct Node<T, N> {
+pub(crate) struct Node<T, N> {
     data: Data<T>,
     next: Link<T, N>,
     _p: PhantomData<N>,
@@ -189,6 +189,16 @@ where
         unsafe { self.node.write_data_unchecked(self.length, val) }
         self.length += 1;
     }
+
+    pub fn iter<'a>(&'a self) -> SequeIter<'a, T, N> {
+        let ptr = NonNull::new(&self.node as *const _ as *mut _);
+        SequeIter::new_iter_at(ptr, self.length)
+    }
+
+    pub fn iter_mut<'a>(&'a mut self) -> SequeIterMut<'a, T, N> {
+        let ptr = NonNull::new(&self.node as *const _ as *mut _);
+        SequeIterMut::new_iter_at(ptr, self.length)
+    }
 }
 
 impl<T, N> ops::Index<usize> for Seque<T, N>
@@ -228,5 +238,115 @@ where
 {
     fn allocator(&self) -> Allocator {
         self.alloc.clone()
+    }
+}
+
+use core::slice::{self, Iter, IterMut};
+
+pub struct SequeIter<'a, T, N> {
+    current: Iter<'a, T>,
+    next: Link<T, N>,
+    len: usize,
+}
+
+impl<'a, T, N> SequeIter<'a, T, N> where N: Unsigned {
+    pub(crate) fn new_iter_at(node: Link<T, N>, len: usize) -> Self {
+        let mut s = Self {
+            current: [].iter(),
+            next: node,
+            len,
+        };
+        s.update_next();
+        s
+    }
+
+    fn update_next(&mut self) -> Option<()> {
+        let new_curr = self.next?;
+        let new_curr = unsafe { new_curr.as_ref() };
+        self.next = new_curr.next;
+        let len = if let Some(_) = self.next {
+            N::USIZE
+        } else {
+            self.len % N::USIZE
+        };
+        // Safety: Immutable slice
+        unsafe { self.current = slice::from_raw_parts(new_curr.get_data_ptr(0), len).iter() };
+        Some(())
+    }
+}
+
+impl<'a, T, N> Iterator for SequeIter<'a, T, N> where N: Unsigned {
+    type Item = <Iter<'a, T> as Iterator>::Item;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.current.next().or_else(|| {
+            self.update_next()?;
+            self.current.next()
+        })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (0, Some(self.len))
+    }
+}
+
+pub struct SequeIterMut<'a, T, N> {
+    current: IterMut<'a, T>,
+    next: Link<T, N>,
+    len: usize,
+}
+
+impl<'a, T, N> SequeIterMut<'a, T, N> where N: Unsigned {
+    pub(crate) fn new_iter_at(node: Link<T, N>, len: usize) -> Self {
+        let mut s = Self {
+            current: [].iter_mut(),
+            next: node,
+            len,
+        };
+        s.update_next();
+        s
+    }
+
+    fn update_next(&mut self) -> Option<()> {
+        let mut new_curr = self.next?;
+        let new_curr = unsafe { new_curr.as_mut() };
+        self.next = new_curr.next;
+        let len = if let Some(_) = self.next {
+            N::USIZE
+        } else {
+            self.len % N::USIZE
+        };
+        // Safety: ???
+        unsafe { self.current = slice::from_raw_parts_mut(new_curr.get_data_ptr_mut(0), len).iter_mut() };
+        Some(())
+    }
+}
+
+impl<'a, T, N> Iterator for SequeIterMut<'a, T, N> where N: Unsigned {
+    type Item = <IterMut<'a, T> as Iterator>::Item;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.current.next().or_else(|| {
+            self.update_next()?;
+            self.current.next()
+        })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (0, Some(self.len))
+    }
+}
+
+impl<'a, T, N> IntoIterator for &'a Seque<T, N> where N: Unsigned {
+    type IntoIter = SequeIter<'a, T, N>;
+    type Item = <Self::IntoIter as Iterator>::Item;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<'a, T, N> IntoIterator for &'a mut Seque<T, N> where N: Unsigned {
+    type IntoIter = SequeIterMut<'a, T, N>;
+    type Item = <Self::IntoIter as Iterator>::Item;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
     }
 }
