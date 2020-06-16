@@ -12,19 +12,6 @@ struct Node<T> {
 }
 
 impl<T> Node<T> {
-    // pub fn new() -> Self {
-    //     DequeNode {
-    //         data: None,
-    //         next: None,
-    //     }
-    // }
-
-    #[inline(always)]
-    fn allocate_node_data(alloc: &Allocator) -> Data<T> {
-        // SAFETY: data is never accessed before first writing a valid value
-        unsafe { alloc.allocate::<T>(NODE_ARRAY_LEN).map(NonNull::cast) }
-    }
-
     pub fn with_data(alloc: &Allocator) -> Self {
         Node {
             data: Node::allocate_node_data(alloc),
@@ -32,12 +19,14 @@ impl<T> Node<T> {
         }
     }
 
-    pub fn allocate_next_node(&mut self, alloc: &Allocator) {
-        if self.next.is_some() {
-            panic!("Replacing existing node");
-        }
+    fn allocate_node_data(alloc: &Allocator) -> Data<T> {
+        // SAFETY: data is never accessed before first writing a valid value
+        unsafe { alloc.allocate::<T>(NODE_ARRAY_LEN).map(NonNull::cast) }
+    }
 
-        self.next = unsafe {
+    fn allocate_next_node(alloc: &Allocator) -> Link<T> {
+        // Safety: Able to remove MaybeUninit because underlying data is initialized
+        unsafe {
             alloc.allocate::<Node<T>>(1).map(|mut node| {
                 node.as_mut().as_mut_ptr().write(Node {
                     data: Node::allocate_node_data(alloc),
@@ -45,63 +34,94 @@ impl<T> Node<T> {
                 });
                 node.cast()
             })
-        };
-
-        if self.next.is_none() {
-            panic!("allocation of node failed");
         }
     }
 
-    pub fn next_node_mut(&mut self) -> Option<&mut Self> {
+    pub fn allocate_node_chain(&mut self, amount: usize, alloc: &Allocator) {
+        let mut node = self;
+        while let Some(ref mut n) = node.next {
+            node = unsafe { n.as_mut() };
+        }
+        for _i in 0..amount {
+            node.next = Self::allocate_next_node(alloc);
+            node = node.next_node_mut().expect("Just allocated");
+        }
+    }
+
+    unsafe fn deallocate_node_chain(&mut self, alloc: &Allocator) {
+        if let Some(next) = self.next_node_mut() {
+            // Safety: any children nodes of a parent node were also allocated
+            next.deallocate_node_chain(alloc);
+            self.next = None;
+        }
+        self.deallocate_node_data(alloc);
+        alloc.deallocate(self as *mut Node<T>, 1);
+    }
+
+    unsafe fn deallocate_node_data(&mut self, alloc: &Allocator) {
+        if let Some(data) = self.data {
+            alloc.deallocate(data.as_ptr(), NODE_ARRAY_LEN);
+            self.data = None;
+        }
+    }
+
+    /// Safety: only deallocate with the same allocator that allocated.
+    /// Only call on the primary node
+    pub unsafe fn deallocate(&mut self, alloc: &Allocator) {
+        if let Some(next) = self.next_node_mut() {
+            next.deallocate_node_chain(alloc)
+        }
+        self.deallocate_node_data(alloc);
+    }
+
+    fn next_node_mut(&mut self) -> Option<&mut Self> {
         self.next.as_mut().map(|node| unsafe { node.as_mut() })
     }
 
-    #[inline]
-    unsafe fn get_ptr_mut(&mut self, idx: usize) -> *mut T {
+    fn next_node(&self) -> Option<&Self> {
+        self.next.as_ref().map(|node| unsafe { node.as_ref() })
+    }
+
+    unsafe fn get_data_ptr_mut(&mut self, idx: usize) -> *mut T {
         let mut node = self;
         let forward = idx / NODE_ARRAY_LEN;
         for _i in 0..forward {
-            node = node
-                .next
-                .as_mut()
-                .expect("Accessing uninitialized block")
-                .as_mut();
+            node = node.next_node_mut().expect("next node not allocated");
         }
-        let ptr = node.data.expect("Accessing uninitialized memory").as_mut() as *mut T;
+        let ptr = node.data.expect("accessing unallocated node data").as_ptr();
         ptr.add(idx % NODE_ARRAY_LEN)
     }
 
-    #[inline]
-    unsafe fn get_ptr(&self, idx: usize) -> *const T {
+    unsafe fn get_data_ptr(&self, idx: usize) -> *const T {
         let mut node = self;
         let forward = idx / NODE_ARRAY_LEN;
         for _i in 0..forward {
-            node = node
-                .next
-                .as_ref()
-                .expect("Accessing uninitialized block")
-                .as_ref();
+            node = node.next_node().expect("next node not allocated");
         }
-        let ptr = node.data.expect("Accessing uninitialized memory").as_mut() as *mut T;
+        let ptr = node.data.expect("accessing unallocated node data").as_ptr() as *const T;
         ptr.add(idx % NODE_ARRAY_LEN)
     }
 
-    pub unsafe fn get_unchecked_mut(&mut self, idx: usize) -> &mut T {
-        &mut *self.get_ptr_mut(idx)
+    pub unsafe fn get_data_unchecked_mut(&mut self, idx: usize) -> &mut T {
+        &mut *self.get_data_ptr_mut(idx)
     }
 
-    pub unsafe fn get_unchecked(&self, idx: usize) -> &T {
-        &*self.get_ptr(idx)
+    pub unsafe fn get_data_unchecked(&self, idx: usize) -> &T {
+        &*self.get_data_ptr(idx)
     }
 
-    pub unsafe fn write_unchecked(&mut self, idx: usize, val: T) {
-        self.get_ptr_mut(idx).write(val)
+    pub unsafe fn write_data_unchecked(&mut self, idx: usize, val: T) {
+        self.get_data_ptr_mut(idx).write(val)
     }
 }
 
 impl<T> ops::Drop for Seque<T> {
     fn drop(&mut self) {
-        //for _v in self.into_iter() {}
+        // Safety: all nodes below the first were allocated
+        // all nodes will have their data deallocated
+        unsafe {
+            self.node.deallocate(&self.alloc);
+        }
     }
 }
 pub struct Seque<T> {
@@ -117,19 +137,17 @@ impl<T> Seque<T> {
             (Node::with_data(&alloc), NODE_ARRAY_LEN)
         } else {
             let mut parent = Node::with_data(&alloc);
-            let mut i = 1 as usize;
-            let capacity = loop {
-                i += 1;
-                if NODE_ARRAY_LEN * i >= capacity {
-                    break NODE_ARRAY_LEN * i;
-                }
+            let capacity = {
+                let mut i = 1 as usize;
+                let cap = loop {
+                    i += 1;
+                    if NODE_ARRAY_LEN * i >= capacity {
+                        break NODE_ARRAY_LEN * i;
+                    }
+                };
+                parent.allocate_node_chain(i - 1, &alloc);
+                cap
             };
-            let mut node = &mut parent;
-            while i > 1 {
-                node.allocate_next_node(&alloc);
-                i -= 1;
-                node = node.next_node_mut().expect("Just allocated");
-            }
             (parent, capacity)
         };
         Self {
@@ -141,11 +159,12 @@ impl<T> Seque<T> {
     }
 
     pub fn push_back(&mut self, val: T) {
-        while self.length >= self.capacity {
-            self.node.allocate_next_node(&self.alloc);
-            self.capacity += NODE_ARRAY_LEN;
+        if self.length >= self.capacity {
+            let amount = self.length / self.capacity;
+            self.node.allocate_node_chain(amount, &self.alloc);
+            self.capacity += NODE_ARRAY_LEN * amount;
         }
-        unsafe { self.node.write_unchecked(self.length, val) }
+        unsafe { self.node.write_data_unchecked(self.length, val) }
         self.length += 1;
     }
 }
@@ -159,7 +178,7 @@ impl<T> ops::Index<usize> for Seque<T> {
                 self.length, index
             );
         }
-        unsafe { self.node.get_unchecked(index) }
+        unsafe { self.node.get_data_unchecked(index) }
     }
 }
 
@@ -171,7 +190,7 @@ impl<T> ops::IndexMut<usize> for Seque<T> {
                 self.length, index
             );
         }
-        unsafe { self.node.get_unchecked_mut(index) }
+        unsafe { self.node.get_data_unchecked_mut(index) }
     }
 }
 

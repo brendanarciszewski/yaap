@@ -2,6 +2,7 @@
 
 ## Latest
 -   reconfigured to use wrapper type for nicer methods
+-   added allocation tracking in tests
 
 ## v0.0.2
 -   added changelog
