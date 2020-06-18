@@ -1,14 +1,11 @@
 use core::{
     marker::PhantomData,
     ops,
-    ptr::NonNull,
+    ptr::{drop_in_place, NonNull},
     slice::{self, Iter, IterMut},
 };
 use typenum::{IsLess, True, Unsigned, U255};
 use yaap::a::{self, Allocator};
-
-type Data<T> = a::Ptr<T>;
-type Link<T, N> = Data<Node<T, N>>;
 
 mod private {
     pub trait Sealed {}
@@ -17,6 +14,9 @@ pub trait TrueMarker: private::Sealed {}
 
 impl private::Sealed for True {}
 impl TrueMarker for True {}
+
+type Data<T> = a::Ptr<T>;
+type Link<T, N> = Data<Node<T, N>>;
 
 pub(crate) struct Node<T, N> {
     data: Data<T>,
@@ -95,14 +95,14 @@ where
         self.deallocate_node_data(alloc);
     }
 
-    unsafe fn get_data_ptr_mut(&mut self, idx: usize) -> *mut T {
+    unsafe fn get_data_ptr_mut(&mut self, idx: usize) -> Option<*mut T> {
         let mut node = self;
         let forward = idx / Self::ARRAY_LEN;
         for _i in 0..forward {
             node = node.next_node_mut().expect("next node not allocated");
         }
-        let ptr = node.data.expect("accessing unallocated node data").as_ptr();
-        ptr.add(idx % Self::ARRAY_LEN)
+        let ptr = node.data?.as_ptr();
+        Some(ptr.add(idx % Self::ARRAY_LEN))
     }
 
     unsafe fn get_data_ptr(&self, idx: usize) -> *const T {
@@ -116,7 +116,7 @@ where
     }
 
     pub unsafe fn get_data_unchecked_mut(&mut self, idx: usize) -> &mut T {
-        &mut *self.get_data_ptr_mut(idx)
+        &mut *self.get_data_ptr_mut(idx).expect("accessing unallocated node data")
     }
 
     pub unsafe fn get_data_unchecked(&self, idx: usize) -> &T {
@@ -124,7 +124,7 @@ where
     }
 
     pub unsafe fn write_data_unchecked(&mut self, idx: usize, val: T) {
-        self.get_data_ptr_mut(idx).write(val)
+        self.get_data_ptr_mut(idx).expect("accessing unallocated node data").write(val)
     }
 }
 
@@ -144,6 +144,23 @@ where
     <N as IsLess<U255>>::Output: TrueMarker,
 {
     fn drop(&mut self) {
+        let mut curr = NonNull::new(&mut self.node as *mut Node<T, N>);
+        while let Some(mut node) = curr {
+            let next = unsafe { &mut *node.as_ptr() }.next;
+            let len = if let Some(_) = next {
+                N::USIZE
+            } else {
+                self.length % N::USIZE
+            };
+            unsafe {
+                if let Some(data) = node.as_mut().get_data_ptr_mut(0) {
+                    let slice = slice::from_raw_parts_mut(data, len);
+                    drop_in_place(slice);
+                }
+            }
+            curr = next;
+        }
+
         // Safety: all nodes below the first were allocated
         // all nodes will have their data deallocated
         unsafe {
@@ -295,7 +312,7 @@ where
             self.len % N::USIZE
         };
         // Safety: Immutable slice
-        unsafe { self.current = slice::from_raw_parts(new_curr.get_data_ptr(0), len).iter() };
+        unsafe { self.current = slice::from_raw_parts(new_curr.get_data_ptr(0), len).iter(); }
         Some(())
     }
 }
@@ -350,8 +367,8 @@ where
         };
         // Safety: ???
         unsafe {
-            self.current = slice::from_raw_parts_mut(new_curr.get_data_ptr_mut(0), len).iter_mut()
-        };
+            self.current = slice::from_raw_parts_mut(new_curr.get_data_ptr_mut(0).expect("accessing unallocated node data"), len).iter_mut();
+        }
         Some(())
     }
 }

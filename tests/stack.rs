@@ -156,3 +156,32 @@ fn no_push_empty() {
     let mut c = Seque::<u8, U16>::with_capacity_in(0, Allocator::new(res.clone()));
     c[0] = 5;
 }
+
+#[test]
+fn test_drop() {
+    static mut COUNTER: isize = 0;
+    struct Test;
+    impl Test {
+        pub fn new() -> Self {
+            unsafe { COUNTER += 1; }
+            Test
+        }
+    }
+    impl Drop for Test {
+        fn drop(&mut self) {
+            unsafe { COUNTER -= 1; }
+        }
+    }
+
+    let res = Tracked::new(StackResource::<U1024>::new());
+    type Seq16 = Seque<Test, U16>;
+    {
+        let mut c = Seq16::with_capacity_in(Seq16::NODE_ARRAY_LEN * 2, Allocator::new(res.clone()));
+        for _i in 0..Seq16::NODE_ARRAY_LEN + 2 {
+            c.push_back(Test::new());
+        }
+        assert_eq!(res.borrow().used(), 32);
+        assert_eq!(unsafe {COUNTER}, 18);
+    }
+    assert_eq!(unsafe {COUNTER}, 0);
+}
