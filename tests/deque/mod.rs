@@ -1,9 +1,22 @@
-use core::{marker::PhantomData, ops, ptr::NonNull};
-use typenum::Unsigned;
+use core::{
+    marker::PhantomData,
+    ops,
+    ptr::NonNull,
+    slice::{self, Iter, IterMut},
+};
+use typenum::{IsLess, True, Unsigned, U255};
 use yaap::a::{self, Allocator};
 
 type Data<T> = a::Ptr<T>;
 type Link<T, N> = Data<Node<T, N>>;
+
+mod private {
+    pub trait Sealed {}
+}
+pub trait TrueMarker: private::Sealed {}
+
+impl private::Sealed for True {}
+impl TrueMarker for True {}
 
 pub(crate) struct Node<T, N> {
     data: Data<T>,
@@ -11,11 +24,15 @@ pub(crate) struct Node<T, N> {
     _p: PhantomData<N>,
 }
 
+/// Since all allocations must be limited to isize::MAX, limit N arbitrarily (allocation will be size<T> * N bytes).
+/// Node alloc will never excede isize::MAX bytes since a Node should be limited to isize * 2 (but this is undefined
+/// by the Rust ABI).
 impl<T, N> Node<T, N>
 where
-    N: Unsigned,
+    N: Unsigned + IsLess<U255>,
+    <N as IsLess<U255>>::Output: TrueMarker,
 {
-    /// assert!(N::USIZE < isize::MAX);
+    /// assert!(N::USIZE * size<T> < isize::MAX);
     const ARRAY_LEN: usize = N::USIZE;
 
     pub fn with_data(alloc: &Allocator) -> Self {
@@ -123,7 +140,8 @@ impl<T, N> Node<T, N> {
 
 impl<T, N> ops::Drop for Seque<T, N>
 where
-    N: Unsigned,
+    N: Unsigned + IsLess<U255>,
+    <N as IsLess<U255>>::Output: TrueMarker,
 {
     fn drop(&mut self) {
         // Safety: all nodes below the first were allocated
@@ -136,7 +154,8 @@ where
 
 pub struct Seque<T, N>
 where
-    N: Unsigned,
+    N: Unsigned + IsLess<U255>,
+    <N as IsLess<U255>>::Output: TrueMarker,
 {
     length: usize,
     capacity: usize,
@@ -146,7 +165,8 @@ where
 
 impl<T, N> Seque<T, N>
 where
-    N: Unsigned,
+    N: Unsigned + IsLess<U255>,
+    <N as IsLess<U255>>::Output: TrueMarker,
 {
     pub const NODE_ARRAY_LEN: usize = Node::<T, N>::ARRAY_LEN;
 
@@ -203,7 +223,8 @@ where
 
 impl<T, N> ops::Index<usize> for Seque<T, N>
 where
-    N: Unsigned,
+    N: Unsigned + IsLess<U255>,
+    <N as IsLess<U255>>::Output: TrueMarker,
 {
     type Output = T;
     fn index(&self, index: usize) -> &Self::Output {
@@ -219,7 +240,8 @@ where
 
 impl<T, N> ops::IndexMut<usize> for Seque<T, N>
 where
-    N: Unsigned,
+    N: Unsigned + IsLess<U255>,
+    <N as IsLess<U255>>::Output: TrueMarker,
 {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         if index >= self.length {
@@ -234,14 +256,13 @@ where
 
 impl<T, N> a::AllocatorAwareContainer for Seque<T, N>
 where
-    N: Unsigned,
+    N: Unsigned + IsLess<U255>,
+    <N as IsLess<U255>>::Output: TrueMarker,
 {
     fn allocator(&self) -> Allocator {
         self.alloc.clone()
     }
 }
-
-use core::slice::{self, Iter, IterMut};
 
 pub struct SequeIter<'a, T, N> {
     current: Iter<'a, T>,
@@ -249,7 +270,11 @@ pub struct SequeIter<'a, T, N> {
     len: usize,
 }
 
-impl<'a, T, N> SequeIter<'a, T, N> where N: Unsigned {
+impl<'a, T, N> SequeIter<'a, T, N>
+where
+    N: Unsigned + IsLess<U255>,
+    <N as IsLess<U255>>::Output: TrueMarker,
+{
     pub(crate) fn new_iter_at(node: Link<T, N>, len: usize) -> Self {
         let mut s = Self {
             current: [].iter(),
@@ -275,7 +300,11 @@ impl<'a, T, N> SequeIter<'a, T, N> where N: Unsigned {
     }
 }
 
-impl<'a, T, N> Iterator for SequeIter<'a, T, N> where N: Unsigned {
+impl<'a, T, N> Iterator for SequeIter<'a, T, N>
+where
+    N: Unsigned + IsLess<U255>,
+    <N as IsLess<U255>>::Output: TrueMarker,
+{
     type Item = <Iter<'a, T> as Iterator>::Item;
     fn next(&mut self) -> Option<Self::Item> {
         self.current.next().or_else(|| {
@@ -295,7 +324,11 @@ pub struct SequeIterMut<'a, T, N> {
     len: usize,
 }
 
-impl<'a, T, N> SequeIterMut<'a, T, N> where N: Unsigned {
+impl<'a, T, N> SequeIterMut<'a, T, N>
+where
+    N: Unsigned + IsLess<U255>,
+    <N as IsLess<U255>>::Output: TrueMarker,
+{
     pub(crate) fn new_iter_at(node: Link<T, N>, len: usize) -> Self {
         let mut s = Self {
             current: [].iter_mut(),
@@ -316,12 +349,18 @@ impl<'a, T, N> SequeIterMut<'a, T, N> where N: Unsigned {
             self.len % N::USIZE
         };
         // Safety: ???
-        unsafe { self.current = slice::from_raw_parts_mut(new_curr.get_data_ptr_mut(0), len).iter_mut() };
+        unsafe {
+            self.current = slice::from_raw_parts_mut(new_curr.get_data_ptr_mut(0), len).iter_mut()
+        };
         Some(())
     }
 }
 
-impl<'a, T, N> Iterator for SequeIterMut<'a, T, N> where N: Unsigned {
+impl<'a, T, N> Iterator for SequeIterMut<'a, T, N>
+where
+    N: Unsigned + IsLess<U255>,
+    <N as IsLess<U255>>::Output: TrueMarker,
+{
     type Item = <IterMut<'a, T> as Iterator>::Item;
     fn next(&mut self) -> Option<Self::Item> {
         self.current.next().or_else(|| {
@@ -335,7 +374,11 @@ impl<'a, T, N> Iterator for SequeIterMut<'a, T, N> where N: Unsigned {
     }
 }
 
-impl<'a, T, N> IntoIterator for &'a Seque<T, N> where N: Unsigned {
+impl<'a, T, N> IntoIterator for &'a Seque<T, N>
+where
+    N: Unsigned + IsLess<U255>,
+    <N as IsLess<U255>>::Output: TrueMarker,
+{
     type IntoIter = SequeIter<'a, T, N>;
     type Item = <Self::IntoIter as Iterator>::Item;
     fn into_iter(self) -> Self::IntoIter {
@@ -343,7 +386,11 @@ impl<'a, T, N> IntoIterator for &'a Seque<T, N> where N: Unsigned {
     }
 }
 
-impl<'a, T, N> IntoIterator for &'a mut Seque<T, N> where N: Unsigned {
+impl<'a, T, N> IntoIterator for &'a mut Seque<T, N>
+where
+    N: Unsigned + IsLess<U255>,
+    <N as IsLess<U255>>::Output: TrueMarker,
+{
     type IntoIter = SequeIterMut<'a, T, N>;
     type Item = <Self::IntoIter as Iterator>::Item;
     fn into_iter(self) -> Self::IntoIter {
